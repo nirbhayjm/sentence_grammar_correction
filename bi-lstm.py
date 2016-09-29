@@ -312,6 +312,8 @@ with tf.Session() as sess:
         logging.info("Model Restored!")
         try:
             logging.info("Beginning testing phase...")
+            f = open("PredictionOutput.txt","a")
+            f.write("Beginning\n")
             logging.info("Training iters:"+str(test_iters))
 
             y_pred_list = []
@@ -324,25 +326,30 @@ with tf.Session() as sess:
             pbar.start()
 
             for i in range(1,test_iters+1):
+            # for i in range(1,2+1):
                 bX,bY,bL = sess.run([test_x,test_y,test_l])
                 feed_dict={x: bX, seqlens: bL}
                 y_predicted = sess.run(prediction_output, feed_dict=feed_dict)
 
-                y_pred_list.append(y_predicted)
-                y_true_list.append(bY)
+                y_pred_list.append(
+                    np.pad(y_predicted,((0,0),(0,212-y_predicted.shape[1])),'constant')
+                )
+                y_true_list.append(
+                    np.pad(bY,((0,0),(0,212-bY.shape[1])),'constant')
+                )
                 len_list.append(bL)
 
                 pbar.update(i)
 
             logging.info("Accumulating predictions...")
+            print "Shape of y_pred_list item:",y_pred_list[0].shape
             y_predicted = np.concatenate(y_pred_list,0)
             y_true = np.concatenate(y_true_list,0)
             lengths = np.concatenate(len_list,0)
             Pr,Re,Fs,_ = confusionScore(y_predicted,y_true,lengths)
-            pred_string = "Pr : %f, Re: %f, F: %f" % (Pr[0],Re[0],F[0])
-            print pred_string
-            with open("PredictionOutput.txt","a") as f:
-                f.write(pred_string)
+            pred_string = "Pr : %f, Re: %f, F: %f\n" % (Pr[0],Re[0],Fs[0])
+            print "\n\nPrediction outputs:"+pred_string
+            f.write(pred_string)
         except tf.errors.OutOfRangeError:
             # Save variables to a file
             save_path = saver.save(sess,"./tmp/"+save_model_name)
