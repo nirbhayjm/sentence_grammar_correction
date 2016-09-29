@@ -24,11 +24,6 @@ learning_rate = 0.01
 display_step = 5
 POS_SIZE = 50
 
-# Dataset parameters
-total_num_examples = 57151
-train_iters = int(total_num_examples*0.8/batch_size)
-test_iters = int(total_num_examples*0.2/batch_size)
-test_batch_size = test_iters
 
 # Loading input
 trainFile = "tmp/trainRecords.tfr"
@@ -46,6 +41,12 @@ n_hidden = 100 # hidden layer num of features
 n_classes = 3
 batch_size = 128
 num_epochs = 10
+
+# Dataset parameters
+total_num_examples = 57151
+test_batch_size = 2*batch_size
+train_iters = int(total_num_examples*0.8/batch_size)
+test_iters = int(total_num_examples*0.2/test_batch_size)
 
 # with tf.device('/cpu:0'):
 # tf Graph input
@@ -243,8 +244,6 @@ with tf.Session() as sess:
         "_bs-"+str(batch_size)+\
         ".ckpt"
     logging.info("Save model name: "+save_model_name)
-
-    logging.info("Training iters:"+str(train_iters))
     
     sess.run(init)
 
@@ -263,6 +262,7 @@ with tf.Session() as sess:
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
     
     if not restore_vars:
+        logging.info("Training iters:"+str(train_iters))
         try:
             logging.info("Beginning training phase...")
             for epoch in range(1,num_epochs+1):
@@ -307,34 +307,52 @@ with tf.Session() as sess:
         finally:
             # When done, ask the threads to stop.
             coord.request_stop()
-
-        # Wait for threads to finish.
-        coord.join(threads)
-        sess.close()
     else:
         saver.restore(sess,"./tmp/"+save_model_name)
         logging.info("Model Restored!")
-        logging.info("Beginning testing phase...")
+        try:
+            logging.info("Beginning testing phase...")
+            logging.info("Training iters:"+str(test_iters))
 
-        bX,bY,bL = sess.run([batch_x,batch_y,batch_l])
-        feed_dict={x: bX, seqlens: bL}
-        y_predicted = sess.run(prediction_output, feed_dict=feed_dict)
-        Pr,Re,Fs,_ = confusionScore(y_predicted,bY,bL)
-        pred_string = "Pr : %f, Re: %f, F: %f" % (Pr[0],Re[0],F[0])
-        print pred_string
-        with open("PredictionOutput.txt","a") as f:
-            f.write(pred_string)
+            y_pred_list = []
+            y_true_list = []
+            len_list = []
 
+            widgets = ["Test Iters:" ,\
+                        FormatLabel(''), Percentage(), Bar(), ETA()]
+            pbar = ProgressBar(maxval=test_iters, widgets=widgets)
+            pbar.start()
 
-    logging.info("Beginning testing phase...")
+            for i in range(1,test_iters+1):
+                bX,bY,bL = sess.run([test_x,test_y,test_l])
+                feed_dict={x: bX, seqlens: bL}
+                y_predicted = sess.run(prediction_output, feed_dict=feed_dict)
 
-    logging.info("Fetching test data...")
-    # x_test,y_test,L_test,p_test = ldcGenerator.makeBatches("Test",returnBatch=True)
+                y_pred_list.append(y_predicted)
+                y_true_list.append(bY)
+                len_list.append(bL)
 
-    # test_dict={x: x_test, y: y_test, seqlens: L_test, p: p_test}
+                pbar.update(i)
 
-    # logging.info("Running net to get predictions...")
-    # y_predicted = sess.run(prediction_output,\
-    #     feed_dict=test_dict)
+            logging.info("Accumulating predictions...")
+            y_predicted = np.concatenate(y_pred_list,0)
+            y_true = np.concatenate(y_true_list,0)
+            lengths = np.concatenate(len_list,0)
+            Pr,Re,Fs,_ = confusionScore(y_predicted,y_true,lengths)
+            pred_string = "Pr : %f, Re: %f, F: %f" % (Pr[0],Re[0],F[0])
+            print pred_string
+            with open("PredictionOutput.txt","a") as f:
+                f.write(pred_string)
+        except tf.errors.OutOfRangeError:
+            # Save variables to a file
+            save_path = saver.save(sess,"./tmp/"+save_model_name)
+            logging.info("\n\nModel saved in file: %s" % save_path)
+        finally:
+            # When done, ask the threads to stop.
+            coord.request_stop()
 
-    # print("Optimization Finished!")
+    # Wait for threads to finish.
+    coord.join(threads)
+    sess.close()
+
+    logging.info("Optimization Finished!")
