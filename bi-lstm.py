@@ -9,6 +9,9 @@ import time
 # Progress Bar
 from progressbar import ETA, Bar, Percentage, ProgressBar, FormatLabel
 
+# Performance metrics
+from sklearn.metrics import precision_recall_fscore_support
+
 import logging
 logging.basicConfig(level=logging.DEBUG, 
     format='%(asctime)s :: %(message)s', 
@@ -21,6 +24,11 @@ learning_rate = 0.01
 display_step = 5
 POS_SIZE = 50
 
+# Dataset parameters
+total_num_examples = 57151
+train_iters = int(total_num_examples*0.8/batch_size)
+test_iters = int(total_num_examples*0.2/batch_size)
+test_batch_size = test_iters
 
 # Loading input
 trainFile = "tmp/trainRecords.tfr"
@@ -65,7 +73,7 @@ ET_init = tf.Variable(tf.convert_to_tensor(np.array(embeddingMat)))
 x_vec = tf.nn.embedding_lookup(ET_init, x, validate_indices=True)
 # p_vec = tf.one_hot(indices=p,depth=46)
 # Shape of p_vec: (batch_size, n_steps, 46)
-y_oneHot = tf.one_hot(indices=y,depth=3)
+# y_oneHot = tf.one_hot(indices=y,depth=3)
 
 # https://github.com/aymericdamien/TensorFlow-Examples/blob/master/examples/3_NeuralNetworks/dynamic_rnn.py
 def DynamicRNN(x, weights, biases):
@@ -193,6 +201,17 @@ def read_and_decode_single_example(filename):
 
     return x,y,l #,p
 
+def confusionScore(y_pred,y_true,lengths):
+    y_pred_all = []
+    y_true_all = []
+    y_pred = y_pred.astype(np.int32)
+
+    for i in range(len(lengths)):
+        # print "\nSample:",y_pred[i,:lengths[i]]
+        y_pred_all += list(y_pred[i,:lengths[i]])
+        y_true_all += list(y_true[i,:lengths[i]])
+    return precision_recall_fscore_support(y_true_all,y_pred_all)
+
 # Batch fetching
 with tf.device('/cpu:0'):
     eX,eY,eL = read_and_decode_single_example(trainFile)
@@ -200,6 +219,16 @@ with tf.device('/cpu:0'):
     batch_x,batch_y,batch_l = tf.train.batch(
         tensors = [eX,eY,eL],
         batch_size = batch_size,
+        dynamic_pad = True,
+        name = 'batches'
+    )
+
+with tf.device('/cpu:0'):
+    tX,tY,tL = read_and_decode_single_example(testFile)
+
+    test_x,test_y,test_l = tf.train.batch(
+        tensors = [tX,tY,tL],
+        batch_size = test_batch_size,
         dynamic_pad = True,
         name = 'batches'
     )
@@ -215,9 +244,6 @@ with tf.Session() as sess:
         ".ckpt"
     logging.info("Save model name: "+save_model_name)
 
-    total_num_examples = 57151
-    train_iters = int(total_num_examples*0.8/batch_size)
-    test_iters = int(total_num_examples*0.2/batch_size)
     logging.info("Training iters:"+str(train_iters))
     
     sess.run(init)
@@ -227,19 +253,16 @@ with tf.Session() as sess:
     else:
         restore_vars = False
 
-    if restore_vars:
-        saver.restore(sess,"./tmp/"+save_model_name)
-        logging.info("Model Restored!")
-    else:
-        logging.info("Initializing queue runners")
-        coord=tf.train.Coordinator()
-        threads=tf.train.start_queue_runners(sess=sess,coord=coord)
+    logging.info("Initializing queue runners")
+    coord=tf.train.Coordinator()
+    threads=tf.train.start_queue_runners(sess=sess,coord=coord)
 
-        # Start input enqueue threads.
-        coord = tf.train.Coordinator()
-        logging.info("Initializing threads")
-        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-
+    # Start input enqueue threads.
+    coord = tf.train.Coordinator()
+    logging.info("Initializing threads")
+    threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+    
+    if not restore_vars:
         try:
             logging.info("Beginning training phase...")
             for epoch in range(1,num_epochs+1):
@@ -288,13 +311,26 @@ with tf.Session() as sess:
         # Wait for threads to finish.
         coord.join(threads)
         sess.close()
+    else:
+        saver.restore(sess,"./tmp/"+save_model_name)
+        logging.info("Model Restored!")
+        logging.info("Beginning testing phase...")
 
-    logging.info("End! Testing phase not yet defined.")
-   
-    # logging.info("Beginning testing phase...")
+        bX,bY,bL = sess.run([batch_x,batch_y,batch_l])
+        feed_dict={x: bX, seqlens: bL}
+        y_predicted = sess.run(prediction_output, feed_dict=feed_dict)
+        Pr,Re,Fs,_ = confusionScore(y_predicted,bY,bL)
+        pred_string = "Pr : %f, Re: %f, F: %f" % (Pr[0],Re[0],F[0])
+        print pred_string
+        with open("PredictionOutput.txt","a") as f:
+            f.write(pred_string)
 
-    # logging.info("Fetching test data...")
+
+    logging.info("Beginning testing phase...")
+
+    logging.info("Fetching test data...")
     # x_test,y_test,L_test,p_test = ldcGenerator.makeBatches("Test",returnBatch=True)
+
     # test_dict={x: x_test, y: y_test, seqlens: L_test, p: p_test}
 
     # logging.info("Running net to get predictions...")
