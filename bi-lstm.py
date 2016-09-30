@@ -39,10 +39,10 @@ EMBEDDING_SIZE = embeddingMat.shape[1]
 # Network Parameters
 # n_steps = seq_max_len
 n_input = EMBEDDING_SIZE + POS_SIZE # Word embedding size + POS one-hot vector size
-n_hidden = 100 # hidden layer num of features
+n_hidden = 512 # hidden layer num of features
 n_classes = 3
 batch_size = 128
-num_epochs = 100
+num_epochs = 200
 
 # Dataset parameters
 total_num_examples = 57151
@@ -78,6 +78,7 @@ x_vec = tf.nn.embedding_lookup(ET_init, x, validate_indices=True)
 # Shape of p_vec: (batch_size, n_steps, 46)
 # y_oneHot = tf.one_hot(indices=y,depth=3)
 
+# Adapted from:
 # https://github.com/aymericdamien/TensorFlow-Examples/blob/master/examples/3_NeuralNetworks/dynamic_rnn.py
 def DynamicRNN(x, weights, biases):
     # Current data input shape: (batch_size, n_steps, n_input)
@@ -101,7 +102,7 @@ def DynamicRNN(x, weights, biases):
         # Forward direction cell
         cell_fw = tf.nn.rnn_cell.BasicLSTMCell(n_hidden,
                                     state_is_tuple=True)
-        outputs_fw,_ = tf.nn.dynamic_rnn(cell_fw, x, 
+        outputs_fw,forward_end_state = tf.nn.dynamic_rnn(cell_fw, x, 
                             dtype=tf.float32,sequence_length=seqlens)
 
     with tf.variable_scope('backward'):
@@ -112,7 +113,9 @@ def DynamicRNN(x, weights, biases):
     # with tf.variable_scope('rnn_outputs') as scope:     
     # scope.reuse_variables()
         outputs_bw,_ = tf.nn.dynamic_rnn(cell_bw, x_rev,
-                            dtype=tf.float32,sequence_length=seqlens)
+                            dtype=tf.float32,
+                            initial_state=forward_end_state,
+                            sequence_length=seqlens)
 
     # print "outputs_fw:",outputs_fw
     # outputs_fw = rnn_outputs(x,False)
@@ -316,7 +319,7 @@ with tf.Session() as sess:
                     pbar.update(i)
                 if epoch%10 == 0:
                     save_path = saver.save(sess,save_root+save_model_name)
-                    save_path = saver.save(sess,save_root+save_model_name+"-epoch-stage-"+epoch)
+                    save_path = saver.save(sess,save_root+save_model_name+"-epoch-stage-"+str(epoch))
                     logging.info("\n\nModel saved in file: %s" % save_path)
 
         except tf.errors.OutOfRangeError:
