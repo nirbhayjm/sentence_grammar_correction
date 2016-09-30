@@ -42,7 +42,7 @@ n_input = EMBEDDING_SIZE + POS_SIZE # Word embedding size + POS one-hot vector s
 n_hidden = 100 # hidden layer num of features
 n_classes = 3
 batch_size = 128
-num_epochs = 200
+num_epochs = 100
 
 # Dataset parameters
 total_num_examples = 57151
@@ -146,7 +146,7 @@ logits = tf.reshape(pred,[-1,n_classes])
 # Initial y shape: (batch_size, n_steps)
 y_flat = tf.reshape(y,[-1])
 
-ratio = (1.0)/(1.0+9.0)
+ratio = (1.0)/(1.0+99.0)
 class_weights = tf.constant([1,ratio, 1.0 - ratio])
 weighted_logits = tf.mul(logits, class_weights)
 
@@ -302,12 +302,6 @@ with tf.Session() as sess:
 
                     feed_dict={x: bX, y: bY, seqlens: bL}
 
-                    logits1 = sess.run(logits, feed_dict=feed_dict)
-                    logits2 = sess.run(weighted_logits, feed_dict=feed_dict)
-                    print "logits:",logits1
-                    print "weighted_logits:",logits2
-
-                    assert False
                     # Run optimization op (backprop)
                     sess.run(optimizer_update, feed_dict=feed_dict)
 
@@ -322,6 +316,7 @@ with tf.Session() as sess:
                     pbar.update(i)
                 if epoch%10 == 0:
                     save_path = saver.save(sess,save_root+save_model_name)
+                    save_path = saver.save(sess,save_root+save_model_name+"-epoch-stage-"+epoch)
                     logging.info("\n\nModel saved in file: %s" % save_path)
 
         except tf.errors.OutOfRangeError:
