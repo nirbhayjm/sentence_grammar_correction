@@ -3,7 +3,7 @@
 import tensorflow as tf
 import numpy as np
 import shelve
-import sys
+import sys,os
 import time
 
 # Progress Bar
@@ -11,6 +11,8 @@ from progressbar import ETA, Bar, Percentage, ProgressBar, FormatLabel
 
 # Performance metrics
 from sklearn.metrics import precision_recall_fscore_support
+
+import visualize_output as VO
 
 import logging
 logging.basicConfig(level=logging.DEBUG, 
@@ -21,7 +23,7 @@ tf.reset_default_graph()
 
 # Parameters
 learning_rate = 0.01
-display_step = 5
+display_step = 10
 POS_SIZE = 50
 
 
@@ -40,7 +42,7 @@ n_input = EMBEDDING_SIZE + POS_SIZE # Word embedding size + POS one-hot vector s
 n_hidden = 100 # hidden layer num of features
 n_classes = 3
 batch_size = 128
-num_epochs = 10
+num_epochs = 200
 
 # Dataset parameters
 total_num_examples = 57151
@@ -138,13 +140,19 @@ def DynamicRNN(x, weights, biases):
 rnn_input = x_vec
 pred = DynamicRNN(rnn_input, weights, biases)
 # Pred has shape (batch_size, n_steps, n_classes)
+logits = tf.reshape(pred,[-1,n_classes])
+# Logits : [ batch_size*n_steps, n_classes ]
 
 # Initial y shape: (batch_size, n_steps)
 y_flat = tf.reshape(y,[-1])
 
+ratio = (1.0)/(1.0+9.0)
+class_weights = tf.constant([1,ratio, 1.0 - ratio])
+weighted_logits = tf.mul(logits, class_weights)
+
 # Define loss and optimizer
 losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
-    tf.reshape(pred,[-1,n_classes]), y_flat)
+                weighted_logits, y_flat)
 
 # Mask the losses
 mask = tf.sign(tf.to_float(y_flat))
@@ -155,13 +163,19 @@ masked_losses = tf.reshape(mask*losses,  tf.shape(y))
 mean_loss_by_example = tf.reduce_sum(masked_losses, reduction_indices=1) / \
                                 tf.to_float(seqlens)
 
-# mean_loss = tf.reduce_mean(mean_loss_by_example)
-summed_loss = tf.reduce_sum(mean_loss_by_example)
+mean_loss = tf.reduce_mean(mean_loss_by_example)
 
-# cost = tf.reduce_mean(mean_loss)
-cost = tf.reduce_mean(summed_loss)
+cost = tf.reduce_mean(mean_loss)
 
-optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(cost) # Adam Optimizer
+# optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(cost) # Adam Optimizer
+
+# Defining the optimizer
+optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+
+# Clipping the gradients
+grads = optimizer.compute_gradients(cost)
+clipped_grads = [(tf.clip_by_value(grad, -15., 15.), var) for grad, var in grads]
+optimizer_update = optimizer.apply_gradients(clipped_grads)
 
 prediction_output = tf.argmax(pred,2)
 
@@ -211,7 +225,9 @@ def confusionScore(y_pred,y_true,lengths):
         # print "\nSample:",y_pred[i,:lengths[i]]
         y_pred_all += list(y_pred[i,:lengths[i]])
         y_true_all += list(y_true[i,:lengths[i]])
-    return precision_recall_fscore_support(y_true_all,y_pred_all)
+    print zip(y_true_all,y_pred_all)
+    return precision_recall_fscore_support(y_true_all,y_pred_all,
+                labels=[1,2],pos_label=2)
 
 # Batch fetching
 with tf.device('/cpu:0'):
@@ -238,6 +254,7 @@ with tf.device('/cpu:0'):
 with tf.Session() as sess:
     logging.info("Main begins!")
 
+    save_root = "./tmp/tf_model_saves/"
     save_model_name = "grammar-BiLSTM_"+\
         "_nhidden-"+str(n_hidden)+\
         "_ne-"+str(num_epochs)+\
@@ -285,8 +302,14 @@ with tf.Session() as sess:
 
                     feed_dict={x: bX, y: bY, seqlens: bL}
 
+                    logits1 = sess.run(logits, feed_dict=feed_dict)
+                    logits2 = sess.run(weighted_logits, feed_dict=feed_dict)
+                    print "logits:",logits1
+                    print "weighted_logits:",logits2
+
+                    assert False
                     # Run optimization op (backprop)
-                    sess.run(optimizer, feed_dict=feed_dict)
+                    sess.run(optimizer_update, feed_dict=feed_dict)
 
                     if i%display_step == 0 and i != 0:
                         duration = (time.time() - start_time)/display_step
@@ -297,25 +320,32 @@ with tf.Session() as sess:
                         widgets[1] = FormatLabel('Cost:%f | Minibatch time: %fs |' % (CostValue,duration) )
                         
                     pbar.update(i)
-            save_path = saver.save(sess,"./tmp/"+save_model_name)
-            logging.info("\n\nModel saved in file: %s" % save_path)
+                if epoch%10 == 0:
+                    save_path = saver.save(sess,save_root+save_model_name)
+                    logging.info("\n\nModel saved in file: %s" % save_path)
 
         except tf.errors.OutOfRangeError:
             # Save variables to a file
-            save_path = saver.save(sess,"./tmp/"+save_model_name)
+            save_path = saver.save(sess,save_root+save_model_name)
             logging.info("\n\nModel saved in file: %s" % save_path)
         finally:
             # When done, ask the threads to stop.
+            save_path = saver.save(sess,save_root+save_model_name)
+            logging.info("\n\nModel saved in file: %s" % save_path)
             coord.request_stop()
     else:
-        saver.restore(sess,"./tmp/"+save_model_name)
-        logging.info("Model Restored!")
+        if os.path.isfile(save_root+save_model_name):
+            saver.restore(sess,save_root+save_model_name)
+            logging.info("Model Restored!")
+        else:
+            assert False, "Model not found!"
         try:
             logging.info("Beginning testing phase...")
-            f = open("PredictionOutput.txt","a")
+            f = open("OutputScores.txt","a")
+            # prediction_dump = open("Predictions.txt","w")
             f.write("Beginning\n")
             logging.info("Training iters:"+str(test_iters))
-
+            x_list = []
             y_pred_list = []
             y_true_list = []
             len_list = []
@@ -326,7 +356,7 @@ with tf.Session() as sess:
             pbar.start()
 
             for i in range(1,test_iters+1):
-            # for i in range(1,2+1):
+            # for i in range(1,5+1):
                 bX,bY,bL = sess.run([test_x,test_y,test_l])
                 feed_dict={x: bX, seqlens: bL}
                 y_predicted = sess.run(prediction_output, feed_dict=feed_dict)
@@ -337,6 +367,9 @@ with tf.Session() as sess:
                 y_true_list.append(
                     np.pad(bY,((0,0),(0,212-bY.shape[1])),'constant')
                 )
+                x_list.append(
+                    np.pad(bX,((0,0),(0,212-bX.shape[1])),'constant')
+                )
                 len_list.append(bL)
 
                 pbar.update(i)
@@ -345,11 +378,20 @@ with tf.Session() as sess:
             print "Shape of y_pred_list item:",y_pred_list[0].shape
             y_predicted = np.concatenate(y_pred_list,0)
             y_true = np.concatenate(y_true_list,0)
+            x_all = np.concatenate(x_list,0)
             lengths = np.concatenate(len_list,0)
             Pr,Re,Fs,_ = confusionScore(y_predicted,y_true,lengths)
-            pred_string = "Pr : %f, Re: %f, F: %f\n" % (Pr[0],Re[0],Fs[0])
+            pred_string = "Pr1 : %f, Re1: %f, F1: %f\n" % (Pr[0],Re[0],Fs[0])
+            pred_string += "Pr2 : %f, Re2: %f, F2: %f\n" % (Pr[1],Re[1],Fs[1])
+                
+            VO.savePredictions(x_all,y_predicted,y_true,lengths)
+
+            # for y_t,y_p in zip(y_true,y_predicted):
+            #     prediction_dump.write(" ".join)
+            # prediction_dump.close()
             print "\n\nPrediction outputs:"+pred_string
             f.write(pred_string)
+            f.close()
         except tf.errors.OutOfRangeError:
             # Save variables to a file
             save_path = saver.save(sess,"./tmp/"+save_model_name)
@@ -362,4 +404,4 @@ with tf.Session() as sess:
     coord.join(threads)
     sess.close()
 
-    logging.info("Optimization Finished!")
+    logging.info("\nOptimization Finished!")
